@@ -1,45 +1,45 @@
 from core.memory import init_db
 from core.vectorstore import add_documents, query
+from career.pipeline import run_career_pipeline, print_results
 
-# 1. Initialize memory
+# Initialize
 init_db()
 
-# 2. Test the career side — store some fake resume experience
-career_docs = [
+# Load YOUR experience into the vector store
+# (Replace these with your real experience!)
+my_experience = [
     "Built a REST API using FastAPI and PostgreSQL for a food delivery startup",
     "Developed a React dashboard for real-time inventory tracking",
-    "Implemented a binary search tree in C++ for an algorithms course",
+    "Implemented binary search tree and graph algorithms in C++ for algorithms course",
     "Led a team of 3 to build a mobile app using React Native and Firebase",
+    "Wrote unit and integration tests using pytest achieving 90% code coverage",
+    "Deployed containerized applications using Docker on AWS EC2",
 ]
 add_documents(
     collection_name="career_experience",
-    docs=career_docs,
-    ids=[f"exp_{i}" for i in range(len(career_docs))],
-    metadata=[{"type": "experience"} for _ in career_docs]
+    docs=my_experience,
+    ids=[f"exp_{i}" for i in range(len(my_experience))],
+    metadata=[{"type": "experience"} for _ in my_experience]
 )
 
-# 3. Test retrieval — simulate a job posting asking for backend skills
-print("\n🔍 Searching for backend-relevant experience...")
-results = query("career_experience", "backend API development Python", n_results=2)
-for r in results:
-    print(f"  → {r['text']}")
+# Paste any real job description here
+sample_job = """
+Software Engineer - Backend (Entry Level)
+We are looking for a backend engineer to join our team.
+Requirements:
+- 1-2 years experience with Python
+- Experience with REST APIs and FastAPI or Django
+- Familiarity with SQL databases (PostgreSQL preferred)
+- Basic understanding of Docker and containerization
+- Experience writing unit tests
+- Bonus: AWS experience, React knowledge
+Responsibilities:
+- Build and maintain backend APIs
+- Write clean, tested, documented code
+- Collaborate with frontend team
+- Participate in code reviews
+"""
 
-# 4. Test the missing persons side — store a fake case
-case_docs = [
-    "John Doe, age 34, last seen March 1st near downtown Miami. Brown hair, 6ft tall, wearing a red jacket.",
-    "Jane Smith, age 19, missing since February 20th. Last seen at University of Florida campus. Blonde hair, 5'4.",
-]
-add_documents(
-    collection_name="missing_cases",
-    docs=case_docs,
-    ids=[f"case_{i}" for i in range(len(case_docs))],
-    metadata=[{"status": "open"} for _ in case_docs]
-)
-
-# 5. Test case cross-reference
-print("\n🔍 Cross-referencing new sighting report...")
-results = query("missing_cases", "young woman seen near university blonde hair", n_results=1)
-for r in results:
-    print(f"  → {r['text']}")
-
-print("\n✅ Day 1 complete — shared core is working!")
+# Run the full pipeline
+results = run_career_pipeline(sample_job)
+print_results(results)
