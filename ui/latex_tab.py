@@ -11,6 +11,22 @@ from career.latex_parser import parse_resume, get_section_summary
 from career.latex_editor import run_latex_editor_agent, generate_diff
 
 
+def scrape_url(url: str):
+    """Scrape a job URL and return the description."""
+    if not url.strip():
+        return "❌ Please enter a URL.", ""
+    try:
+        from career.job_scraper import scrape_job_url
+        result = scrape_job_url(url.strip())
+        if result["success"]:
+            status = f"✅ Scraped **{result['site']}** — {result['char_count']} characters extracted"
+            return status, result["job_description"]
+        else:
+            return f"❌ Scrape failed: {result['error']}\n\n*Try pasting the job description manually.*", ""
+    except Exception as e:
+        return f"❌ Error: {str(e)}", ""
+
+
 def process_latex_resume(tex_file, job_description: str):
     """Main handler: parse → edit → diff → return results."""
 
@@ -94,24 +110,41 @@ def build_latex_tab():
     with gr.Tab("📄 LaTeX Resume Editor"):
         gr.Markdown("""
 ### AI-Powered LaTeX Resume Editor
-Upload your `.tex` file + paste a job description → get targeted edits with confidence scores.
+Upload your `.tex` file + paste a job URL or description → get targeted edits with confidence scores.
 **Formatting, dates, company names, and URLs are never touched.**
         """)
 
         with gr.Row():
+            # ── LEFT COLUMN: inputs ──────────────────
             with gr.Column(scale=1):
                 tex_upload = gr.File(
                     label="Upload your .tex resume",
                     file_types=[".tex"],
                     type="filepath"
                 )
+
+                gr.Markdown("### Job Description")
+                gr.Markdown("*Paste a URL and we'll scrape it, or paste the description directly.*")
+
+                with gr.Row():
+                    url_input = gr.Textbox(
+                        label="Job URL (optional)",
+                        placeholder="https://linkedin.com/jobs/view/... or any job posting URL",
+                        scale=3
+                    )
+                    scrape_btn = gr.Button("🔗 Scrape", variant="secondary", scale=1)
+
+                scrape_status = gr.Markdown("")
+
                 job_desc_input = gr.Textbox(
                     label="Job Description",
-                    placeholder="Paste the full job posting here...",
+                    placeholder="Paste the full job posting here, or scrape a URL above...",
                     lines=10
                 )
+
                 run_btn = gr.Button("🚀 Edit My Resume", variant="primary", size="lg")
 
+            # ── RIGHT COLUMN: status ─────────────────
             with gr.Column(scale=2):
                 parse_status = gr.Markdown("")
                 summary_out  = gr.Markdown("")
@@ -126,6 +159,13 @@ Upload your `.tex` file + paste a job description → get targeted edits with co
             with gr.Tab("⬇️ Download"):
                 gr.Markdown("*Your edited `.tex` file — ready for Overleaf.*")
                 download_out = gr.File(label="Download Edited Resume")
+
+        # ── Wire up buttons ──────────────────────────
+        scrape_btn.click(
+            scrape_url,
+            inputs=[url_input],
+            outputs=[scrape_status, job_desc_input]
+        )
 
         run_btn.click(
             process_latex_resume,
