@@ -1,6 +1,7 @@
 """
 LaTeX Resume Editor Agent
 Takes parsed chunks + job description → returns targeted edits with confidence scores.
+Never breaks LaTeX syntax. Never touches URLs or href commands.
 """
 
 import ollama
@@ -20,6 +21,9 @@ STRICT RULES:
 4. Never change dates, company names, job titles, or URLs
 5. Keep edits natural — don't keyword-stuff
 6. Assign a confidence score 0-100 for each edit
+7. NEVER modify any chunk that contains a URL or \\href command
+8. NEVER split or wrap long lines — keep each line exactly as-is
+9. Only edit plain text description content, never title lines
 
 Return this exact JSON structure:
 {
@@ -37,7 +41,7 @@ Return this exact JSON structure:
   ]
 }
 
-If a chunk doesn't need changes, don't include it in edits.
+If a chunk contains a URL, href, or job title — do NOT include it in edits.
 change_type must be one of: keyword_alignment, impact_metric, clarity, skills_addition
 """
 
@@ -55,13 +59,22 @@ def call_llm(system_prompt: str, user_message: str) -> dict:
     clean = raw.strip().replace("```json", "").replace("```", "").strip()
     start = clean.find("{")
     end = clean.rfind("}") + 1
-    return json.loads(clean[start:end])
+    json_str = clean[start:end]
+
+    # Fix unescaped backslashes that break JSON parsing (common with LaTeX content)
+    json_str = re.sub(r'(?<!\\)\\(?!["\\/bfnrtu])', r'\\\\', json_str)
+
+    return json.loads(json_str)
 
 
 def reconstruct_latex(original_latex: str, original_content: str, new_content: str) -> str:
     """
     Splice new content back into LaTeX, preserving all commands.
     """
+    # Safety: never touch anything with URLs
+    if '\\href' in original_latex or 'http' in original_latex:
+        return original_latex
+
     # Skills rows: "Category: & values \\"
     if '&' in original_latex:
         parts = original_latex.split('&', 1)
@@ -104,8 +117,14 @@ def run_latex_editor_agent(chunks: list[LatexChunk], job_description: str) -> di
     """
     print("\n🤖 LaTeX Editor Agent is analyzing your resume...")
 
+    # Filter out chunks with URLs before sending to LLM
+    safe_chunks = [
+        c for c in chunks
+        if '\\href' not in c.original and 'http' not in c.original
+    ]
+
     chunks_text = ""
-    for i, chunk in enumerate(chunks):
+    for i, chunk in enumerate(safe_chunks):
         chunks_text += f"\n[{i}] Section: {chunk.section} | Type: {chunk.chunk_type}\n"
         chunks_text += f"Content: {chunk.content}\n"
 
@@ -123,7 +142,7 @@ Return JSON with edits and tips as specified."""
     final_edits = []
     for edit in result.get("edits", []):
         matched_chunk = None
-        for chunk in chunks:
+        for chunk in safe_chunks:
             if edit.get("original_content", "").strip().lower() in chunk.content.lower():
                 matched_chunk = chunk
                 break
@@ -135,6 +154,10 @@ Return JSON with edits and tips as specified."""
                 break
 
         if matched_chunk:
+            # Safety: skip anything with URLs
+            if '\\href' in matched_chunk.original or 'http' in matched_chunk.original:
+                continue
+
             new_latex = reconstruct_latex(
                 matched_chunk.original,
                 matched_chunk.content,

@@ -141,16 +141,7 @@ _{f.get('hotline')}_"""
 
 # ── GRADIO UI ─────────────────────────────────────
 
-with gr.Blocks(
-    title="Hybrid AI Platform",
-    theme=gr.themes.Soft(),
-    css="""
-    .header { text-align: center; padding: 20px; }
-    .tab-career { border-left: 4px solid #2563eb; }
-    .tab-missing { border-left: 4px solid #dc2626; }
-    """
-) as app:
-
+with gr.Blocks(title="Hybrid AI Platform") as app:
     gr.HTML("""
     <div class="header">
         <h1>🤖 Hybrid AI Platform</h1>
@@ -287,4 +278,5 @@ This platform runs **100% locally** — no data leaves your machine.
             """)
 
 if __name__ == "__main__":
-    app.launch(share=False, server_port=7860)
+	import tempfile
+	app.launch(share=False, server_port=7860, allowed_paths=[tempfile.gettempdir()])

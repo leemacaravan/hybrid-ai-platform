@@ -1,10 +1,14 @@
 """
 LaTeX Resume Editor — Gradio UI Tab
+Accepts ZIP (containing .tex + .cls + assets), exports edited ZIP.
 """
 
 import gradio as gr
 import os
 import sys
+import tempfile
+import zipfile
+import shutil
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from career.latex_parser import parse_resume, get_section_summary
@@ -18,6 +22,16 @@ def scrape_url(url: str):
     try:
         from career.job_scraper import scrape_job_url
         result = scrape_job_url(url.strip())
+
+        if result.get("error") == "linkedin_blocked":
+            return """⚠️ **LinkedIn blocks automated scraping** (they require login).
+
+**Easy workaround — 30 seconds:**
+1. Open the LinkedIn job posting in your browser
+2. Scroll to the **"About the job"** section
+3. Select all that text → Copy
+4. Paste it into the Job Description box below""", ""
+
         if result["success"]:
             status = f"✅ Scraped **{result['site']}** — {result['char_count']} characters extracted"
             return status, result["job_description"]
@@ -27,27 +41,80 @@ def scrape_url(url: str):
         return f"❌ Error: {str(e)}", ""
 
 
-def process_latex_resume(tex_file, job_description: str):
-    """Main handler: parse → edit → diff → return results."""
+def extract_zip(zip_path: str) -> tuple[str, str, list[str]]:
+    """
+    Extract ZIP to a temp dir.
+    Returns: (extract_dir, tex_file_path, all_file_paths)
+    """
+    extract_dir = os.path.join(tempfile.gettempdir(), "resume_zip_extract")
+    if os.path.exists(extract_dir):
+        shutil.rmtree(extract_dir)
+    os.makedirs(extract_dir)
 
-    if not tex_file:
-        return "❌ Please upload your .tex file.", "", "", "", None
+    with zipfile.ZipFile(zip_path, 'r') as z:
+        z.extractall(extract_dir)
+
+    tex_file = None
+    all_files = []
+    for root, dirs, files in os.walk(extract_dir):
+        for f in files:
+            full_path = os.path.join(root, f)
+            all_files.append(full_path)
+            if f.endswith('.tex') and tex_file is None:
+                tex_file = full_path
+
+    return extract_dir, tex_file, all_files
+
+
+def build_output_zip(extract_dir: str, edited_tex: str, original_tex_path: str) -> str:
+    """
+    Build a new ZIP with the edited .tex + all original support files.
+    Returns path to the new ZIP.
+    """
+    with open(original_tex_path, 'w', encoding='utf-8') as f:
+        f.write(edited_tex)
+
+    output_zip_path = os.path.join(tempfile.gettempdir(), "resume_edited.zip")
+    with zipfile.ZipFile(output_zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(extract_dir):
+            for file in files:
+                file_path = os.path.join(root, file)
+                arcname = os.path.relpath(file_path, extract_dir)
+                zf.write(file_path, arcname)
+
+    return output_zip_path
+
+
+def process_latex_resume(zip_file, job_description: str):
+    """Main handler: unzip → parse → edit → rezip → return results."""
+
+    if not zip_file:
+        return "❌ Please upload your resume ZIP file.", "", "", "", None
 
     if not job_description.strip():
         return "❌ Please paste a job description.", "", "", "", None
 
     try:
-        with open(tex_file, 'r', encoding='utf-8') as f:
+        # Step 1: Extract ZIP
+        extract_dir, tex_path, all_files = extract_zip(zip_file)
+
+        if not tex_path:
+            return "❌ No .tex file found in ZIP.", "", "", "", None
+
+        file_list = "\n".join([f"  • {os.path.basename(f)}" for f in all_files])
+
+        with open(tex_path, 'r', encoding='utf-8') as f:
             original_tex = f.read()
 
-        # Step 1: Parse
+        # Step 2: Parse
         chunks = parse_resume(original_tex)
         summary = get_section_summary(chunks)
 
-        parse_status = "✅ **Resume parsed successfully!**\n\n| Section | Chunks Found |\n|---|---|\n"
+        parse_status = f"✅ **ZIP extracted — {len(all_files)} files found:**\n{file_list}\n\n"
+        parse_status += "**Resume sections parsed:**\n\n| Section | Chunks |\n|---|---|\n"
         parse_status += "\n".join([f"| {k} | {v} |" for k, v in summary.items()])
 
-        # Step 2: Run editor agent
+        # Step 3: Run editor agent
         edit_results = run_latex_editor_agent(chunks, job_description)
         edits = edit_results["edits"]
         tips = edit_results["tips"]
@@ -55,13 +122,13 @@ def process_latex_resume(tex_file, job_description: str):
         if not edits:
             return parse_status, "✅ Your resume already matches this job well!", "", "\n".join([f"💡 {t}" for t in tips]), None
 
-        # Step 3: Apply edits
+        # Step 4: Apply edits
         edited_tex = original_tex
         for edit in edits:
             if edit["original_latex"] in edited_tex:
                 edited_tex = edited_tex.replace(edit["original_latex"], edit["new_latex"], 1)
 
-        # Step 4: Build diff display
+        # Step 5: Build diff display
         diff_md = "## 📝 Changes Made\n\n"
 
         high   = [e for e in edits if e["confidence"] >= 80]
@@ -85,21 +152,23 @@ def process_latex_resume(tex_file, job_description: str):
         diff_md += render_group(medium, "🟡", "Medium Confidence (60-79%) — Review before using")
         diff_md += render_group(low,    "🔴", "Low Confidence (<60%) — Your call")
 
-        # Step 5: Tips
+        # Step 6: Tips
         tips_md = "## 💡 Optional Tips\n\n*Things the editor didn't change but recommends:*\n\n"
         for tip in tips:
             tips_md += f"- {tip}\n"
         if not tips:
             tips_md += "_No additional tips!_"
 
-        # Step 6: Save edited .tex
-        output_path = "/tmp/resume_edited.tex"
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(edited_tex)
+        # Step 7: Build output ZIP
+        output_zip = build_output_zip(extract_dir, edited_tex, tex_path)
 
-        summary_line = f"✅ Made **{len(edits)} changes** ({len(high)} high, {len(medium)} medium, {len(low)} low confidence)"
+        summary_line = (
+            f"✅ Made **{len(edits)} changes** "
+            f"({len(high)} high, {len(medium)} medium, {len(low)} low confidence)\n\n"
+            f"📦 Download the ZIP below and upload directly to Overleaf!"
+        )
 
-        return parse_status, summary_line, diff_md, tips_md, output_path
+        return parse_status, summary_line, diff_md, tips_md, output_zip
 
     except Exception as e:
         import traceback
@@ -110,21 +179,23 @@ def build_latex_tab():
     with gr.Tab("📄 LaTeX Resume Editor"):
         gr.Markdown("""
 ### AI-Powered LaTeX Resume Editor
-Upload your `.tex` file + paste a job URL or description → get targeted edits with confidence scores.
+Upload your resume **ZIP file** (containing `.tex` + `resume.cls` + any assets) → get targeted edits → download an Overleaf-ready ZIP.
 **Formatting, dates, company names, and URLs are never touched.**
         """)
 
         with gr.Row():
-            # ── LEFT COLUMN: inputs ──────────────────
             with gr.Column(scale=1):
-                tex_upload = gr.File(
-                    label="Upload your .tex resume",
-                    file_types=[".tex"],
+
+                gr.Markdown("### 1. Upload Resume ZIP")
+                gr.Markdown("*Zip your `.tex`, `resume.cls`, and `qr_code.png` together, then upload.*")
+                zip_upload = gr.File(
+                    label="Upload resume ZIP",
+                    file_types=[".zip"],
                     type="filepath"
                 )
 
-                gr.Markdown("### Job Description")
-                gr.Markdown("*Paste a URL and we'll scrape it, or paste the description directly.*")
+                gr.Markdown("### 2. Job Description")
+                gr.Markdown("*Paste a URL to scrape, or paste the description directly.*")
 
                 with gr.Row():
                     url_input = gr.Textbox(
@@ -144,7 +215,6 @@ Upload your `.tex` file + paste a job URL or description → get targeted edits 
 
                 run_btn = gr.Button("🚀 Edit My Resume", variant="primary", size="lg")
 
-            # ── RIGHT COLUMN: status ─────────────────
             with gr.Column(scale=2):
                 parse_status = gr.Markdown("")
                 summary_out  = gr.Markdown("")
@@ -157,10 +227,9 @@ Upload your `.tex` file + paste a job URL or description → get targeted edits 
             with gr.Tab("💡 Tips"):
                 tips_out = gr.Markdown("")
             with gr.Tab("⬇️ Download"):
-                gr.Markdown("*Your edited `.tex` file — ready for Overleaf.*")
-                download_out = gr.File(label="Download Edited Resume")
+                gr.Markdown("*Download your edited ZIP — drag it straight into Overleaf to compile.*")
+                download_out = gr.File(label="Download Edited Resume ZIP")
 
-        # ── Wire up buttons ──────────────────────────
         scrape_btn.click(
             scrape_url,
             inputs=[url_input],
@@ -169,6 +238,6 @@ Upload your `.tex` file + paste a job URL or description → get targeted edits 
 
         run_btn.click(
             process_latex_resume,
-            inputs=[tex_upload, job_desc_input],
+            inputs=[zip_upload, job_desc_input],
             outputs=[parse_status, summary_out, diff_out, tips_out, download_out]
         )

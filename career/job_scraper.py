@@ -203,26 +203,30 @@ def clean_extracted_text(text: str) -> str:
 def scrape_job_url(url: str) -> dict:
     """
     Main function: takes any job URL → returns extracted job description.
-    Returns: {"success": bool, "job_description": str, "site": str, "error": str}
     """
     site = detect_site(url)
     print(f"🔍 Detected site: {site}")
 
+    # LinkedIn blocks all scrapers — guide user to copy instead
+    if site == "linkedin":
+        return {
+            "success": False,
+            "job_description": "",
+            "site": "linkedin",
+            "char_count": 0,
+            "error": "linkedin_blocked"
+        }
+
     try:
-        # Try simple scrape first (faster)
         try:
             raw_text = scrape_simple(url)
             print(f"   Simple scrape: {len(raw_text)} chars")
         except Exception:
-            # Fall back to Playwright for JS-heavy sites
             print(f"   Simple scrape failed, trying Playwright...")
             raw_text = scrape_with_playwright(url)
             print(f"   Playwright scrape: {len(raw_text)} chars")
 
-        # Site-specific extraction
-        if site == "linkedin":
-            extracted = extract_linkedin(raw_text)
-        elif site == "indeed":
+        if site == "indeed":
             extracted = extract_indeed(raw_text)
         elif site == "glassdoor":
             extracted = extract_glassdoor(raw_text)
@@ -232,7 +236,6 @@ def scrape_job_url(url: str) -> dict:
         cleaned = clean_extracted_text(extracted)
 
         if len(cleaned) < 100:
-            # Too short — probably got blocked, try Playwright
             print("   Content too short, retrying with Playwright...")
             raw_text = scrape_with_playwright(url)
             extracted = extract_generic(raw_text, url)
